@@ -1546,7 +1546,158 @@ sudo apt-get clean
 ### Step 2
 ### Step 3
 ### Challenge
+```
+int
+do_pgfault(struct mm_struct *mm, uint32_t error_code, uintptr_t addr) {
+    int ret = -E_INVAL;
+    //try to find a vma which include addr
+    struct vma_struct *vma = find_vma(mm, addr);
 
+    pgfault_num++;
+    //If the addr is in the range of a mm's vma?
+    if (vma == NULL || vma->vm_start > addr) {
+        cprintf("not valid addr %x, and  can not find it in vma\n", addr);
+        goto failed;
+    }
+    //check the error_code
+    switch (error_code & 3) {
+    default:
+            /* error code flag : default is 3 ( W/R=1, P=1): write, present */
+    case 2: /* error code flag : (W/R=1, P=0): write, not present */
+        if (!(vma->vm_flags & VM_WRITE)) {
+            cprintf("do_pgfault failed: error code flag = write AND not present, but the addr's vma cannot write\n");
+            goto failed;
+        }
+        break;
+    case 1: /* error code flag : (W/R=0, P=1): read, present */
+        cprintf("do_pgfault failed: error code flag = read AND present\n");
+        goto failed;
+    case 0: /* error code flag : (W/R=0, P=0): read, not present */
+        if (!(vma->vm_flags & (VM_READ | VM_EXEC))) {
+            cprintf("do_pgfault failed: error code flag = read AND not present, but the addr's vma cannot read or exec\n");
+            goto failed;
+        }
+    }
+    /* IF (write an existed addr ) OR
+     *    (write an non_existed addr && addr is writable) OR
+     *    (read  an non_existed addr && addr is readable)
+     * THEN
+     *    continue process
+     */
+    uint32_t perm = PTE_U;
+    if (vma->vm_flags & VM_WRITE) {
+        perm |= PTE_W;
+    }
+    addr = ROUNDDOWN(addr, PGSIZE);
+
+    ret = -E_NO_MEM;
+
+    pte_t *ptep=NULL;
+    /*LAB3 EXERCISE 1: YOUR CODE
+    * Maybe you want help comment, BELOW comments can help you finish the code
+    *
+    * Some Useful MACROs and DEFINEs, you can use them in below implementation.
+    * MACROs or Functions:
+    *   get_pte : get an pte and return the kernel virtual address of this pte for la
+    *             if the PT contians this pte didn't exist, alloc a page for PT (notice the 3th parameter '1')
+    *   pgdir_alloc_page : call alloc_page & page_insert functions to allocate a page size memory & setup
+    *             an addr map pa<--->la with linear address la and the PDT pgdir
+    * DEFINES:
+    *   VM_WRITE  : If vma->vm_flags & VM_WRITE == 1/0, then the vma is writable/non writable
+    *   PTE_W           0x002                   // page table/directory entry flags bit : Writeable
+    *   PTE_U           0x004                   // page table/directory entry flags bit : User can access
+    * VARIABLES:
+    *   mm->pgdir : the PDT of these vma
+    *
+    */
+#if 0
+    /*LAB3 EXERCISE 1: YOUR CODE*/
+    ptep = ???              //(1) try to find a pte, if pte's PT(Page Table) isn't existed, then create a PT.
+    if (*ptep == 0) {
+                            //(2) if the phy addr isn't exist, then alloc a page & map the phy addr with logical addr
+
+    }
+    else {
+    /*LAB3 EXERCISE 2: YOUR CODE
+    * Now we think this pte is a  swap entry, we should load data from disk to a page with phy addr,
+    * and map the phy addr with logical addr, trigger swap manager to record the access situation of this page.
+    *
+    *  Some Useful MACROs and DEFINEs, you can use them in below implementation.
+    *  MACROs or Functions:
+    *    swap_in(mm, addr, &page) : alloc a memory page, then according to the swap entry in PTE for addr,
+    *                               find the addr of disk page, read the content of disk page into this memroy page
+    *    page_insert ： build the map of phy addr of an Page with the linear addr la
+    *    swap_map_swappable ： set the page swappable
+    */
+    /*
+     * LAB5 CHALLENGE ( the implmentation Copy on Write)
+		There are 2 situlations when code comes here.
+		  1) *ptep & PTE_P == 1, it means one process try to write a readonly page. 
+		     If the vma includes this addr is writable, then we can set the page writable by rewrite the *ptep.
+		     This method could be used to implement the Copy on Write (COW) thchnology(a fast fork process method).
+		  2) *ptep & PTE_P == 0 & but *ptep!=0, it means this pte is a  swap entry.
+		     We should add the LAB3's results here.
+     */
+        if(swap_init_ok) {
+            struct Page *page=NULL;
+                                    //(1）According to the mm AND addr, try to load the content of right disk page
+                                    //    into the memory which page managed.
+                                    //(2) According to the mm, addr AND page, setup the map of phy addr <---> logical addr
+                                    //(3) make the page swappable.
+                                    //(4) [NOTICE]: you myabe need to update your lab3's implementation for LAB5's normal execution.
+        }
+        else {
+            cprintf("no swap_init_ok but ptep is %x, failed\n",*ptep);
+            goto failed;
+        }
+   }
+#endif
+    // try to find a pte, if pte's PT(Page Table) isn't existed, then create a PT.
+    // (notice the 3th parameter '1')
+    if ((ptep = get_pte(mm->pgdir, addr, 1)) == NULL) {
+        cprintf("get_pte in do_pgfault failed\n");
+        goto failed;
+    }
+    
+    if (*ptep == 0) { // if the phy addr isn't exist, then alloc a page & map the phy addr with logical addr
+        if (pgdir_alloc_page(mm->pgdir, addr, perm) == NULL) {
+            cprintf("pgdir_alloc_page in do_pgfault failed\n");
+            goto failed;
+        }
+    }
+    else {
+        struct Page *page=NULL;
+        cprintf("do pgfault: ptep %x, pte %x\n",ptep, *ptep);
+        if (*ptep & PTE_P) {
+            //if process write to this existed readonly page (PTE_P means existed), then should be here now.
+            //we can implement the delayed memory space copy for fork child process (AKA copy on write, COW).
+            //we didn't implement now, we will do it in future.
+            panic("error write a non-writable pte");
+            //page = pte2page(*ptep);
+        } else{
+           // if this pte is a swap entry, then load data from disk to a page with phy addr
+           // and call page_insert to map the phy addr with logical addr
+           if(swap_init_ok) {               
+               if ((ret = swap_in(mm, addr, &page)) != 0) {
+                   cprintf("swap_in in do_pgfault failed\n");
+                   goto failed;
+               }    
+
+           }  
+           else {
+            cprintf("no swap_init_ok but ptep is %x, failed\n",*ptep);
+            goto failed;
+           }
+       } 
+       page_insert(mm->pgdir, page, addr, perm);
+       swap_map_swappable(mm, addr, page, 1);
+   }
+   ret = 0;
+failed:
+    return ret;
+}
+
+```
 ## 遇到的问题/错误
 
 ## 知识点总结
